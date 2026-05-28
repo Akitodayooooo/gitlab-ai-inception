@@ -10,26 +10,16 @@
 
 - [x] このリポジトリをGitLabにPush（Project ID: 1）
   - CI/CD configuration file: `agent/.gitlab-ci.yml` 設定済み
-- [ ] Bot user（`ai-bot`）を作成（Developerロール）
-- [ ] Bot userのPersonal Access Token発行（`api` scope） → `.env` の `GITLAB_TOKEN` に設定
-- [ ] Bot userのIDを確認 → `.env` の `BOT_USER_ID` に設定
-  ```bash
-  curl http://13.193.85.82/api/v4/users?username=ai-bot
-  ```
+- [x] Bot user（`ci-bot`）を作成（Developerロール、User ID: 3）
+- [x] Bot userのPersonal Access Token発行 → `.env` 設定済み
+- [x] Bot userのID確認 → `BOT_USER_ID=3`
 
 ## トークン取得・環境変数設定
 
-- [ ] Pipeline Trigger Token発行 → `.env` の `TRIGGER_TOKEN` に設定
-  - `Settings > CI/CD > Pipeline triggers`
-- [ ] プロジェクトIDを確認 → `.env` の `GITLAB_PROJECT_ID` に設定
-  - `Settings > General` のProject IDを確認
-- [ ] `WEBHOOK_SECRET` に任意の文字列を設定
-- [ ] `.env` を更新してEC2に転送・webhook-receiverを再起動
-  ```bash
-  scp -i gitlab-ai.pem .env ubuntu@13.193.85.82:/home/ubuntu/gitlab-ai-inception/.env
-  ssh -i gitlab-ai.pem ubuntu@13.193.85.82 \
-    "cd /home/ubuntu/gitlab-ai-inception && docker compose restart webhook-receiver"
-  ```
+- [x] Pipeline Trigger Token発行 → `.env` 設定済み
+- [x] プロジェクトID確認 → `GITLAB_PROJECT_ID=1`
+- [x] `WEBHOOK_SECRET` 設定済み
+- [x] `.env` をEC2に転送・webhook-receiver再起動済み
 
 ## GitLab Runner登録
 
