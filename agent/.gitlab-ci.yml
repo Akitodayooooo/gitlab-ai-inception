@@ -12,7 +12,7 @@ inception_agent:
   before_script:
     - pip install --quiet anthropic==0.40.0 httpx==0.28.1
   script:
-    - python gitlab-ci/inception_agent.py
+    - python agent/inception_agent.py
   variables:
     # CI Variables (Settings > CI/CD > Variables) で設定すること
     # - ANTHROPIC_API_KEY (Masked)
