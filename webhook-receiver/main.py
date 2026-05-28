@@ -112,7 +112,8 @@ def _handle_note_event(payload: dict) -> dict:
     if author_id == BOT_USER_ID:
         return {"status": "ignored", "reason": "bot comment"}
 
-    issue_iid = str(note.get("noteable_iid"))
+    # GitLabのコメントWebhookではIIDはtop-levelの issue.iid に入っている
+    issue_iid = str(payload.get("issue", {}).get("iid"))
 
     # ai-inception ラベルが付いており、かつ未完了の場合のみトリガー
     labels = get_issue_labels(issue_iid)
