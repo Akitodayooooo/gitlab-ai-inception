@@ -139,8 +139,12 @@ curl -X PUT -H "PRIVATE-TOKEN: $ROOT_TOKEN" \
 
 ## 5. Bot userの作成
 
-> **注意**: GitLab 16以降、`ai-` / `duo-` で始まるユーザー名は予約済みで使用不可。
+> **注意①**: GitLab 16以降、`ai-` / `duo-` で始まるユーザー名は予約済みで使用不可。
 > `ci-bot` や `inception-bot` など別の名前を使うこと。
+
+> **注意②**: Bot userには **Maintainerロール** が必要。
+> インセプション完了時に `docs/inception/` へ直接コミットするため、
+> Developerでは保護ブランチへの書き込みができない。
 
 ### APIで一括実行（推奨）
 
@@ -154,10 +158,10 @@ BOT_ID=$(curl -s -H "PRIVATE-TOKEN: $ROOT_TOKEN" \
   | python3 -c "import sys,json; print(json.load(sys.stdin)[0]['id'])")
 echo "BOT_USER_ID: $BOT_ID"
 
-# プロジェクトにDeveloperとして追加
+# プロジェクトにMaintainerとして追加（access_level=40）
 curl -X POST -H "PRIVATE-TOKEN: $ROOT_TOKEN" \
   "$GITLAB/api/v4/projects/1/members" \
-  -d "user_id=$BOT_ID&access_level=30"
+  -d "user_id=$BOT_ID&access_level=40"
 
 # PATを発行（admin権限で他ユーザーのPATを発行可能）
 curl -X POST -H "PRIVATE-TOKEN: $ROOT_TOKEN" \
@@ -166,6 +170,13 @@ curl -X POST -H "PRIVATE-TOKEN: $ROOT_TOKEN" \
   -d '{"name":"inception-agent","scopes":["api"]}'
 # → レスポンスの token を .env の GITLAB_TOKEN に設定
 ```
+
+> **既にDeveloperで追加済みの場合の昇格:**
+> ```bash
+> curl -X PUT -H "PRIVATE-TOKEN: $ROOT_TOKEN" \
+>   "$GITLAB/api/v4/projects/1/members/$BOT_ID" \
+>   -d "access_level=40"
+> ```
 
 ---
 
