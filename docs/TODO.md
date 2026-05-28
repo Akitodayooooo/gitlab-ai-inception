@@ -27,9 +27,8 @@
 
 ## CI/CD Variables設定
 
-- [ ] `ANTHROPIC_API_KEY` を登録（Masked）
-  - `Settings > CI/CD > Variables`
-- [ ] `GITLAB_TOKEN` を登録（Masked）
+- [x] `ANTHROPIC_API_KEY` を登録（Masked）
+- [x] `GITLAB_TOKEN` を登録（Masked）
 
 ## Webhook設定
 
