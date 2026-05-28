@@ -8,9 +8,8 @@
 
 ## プロジェクト・ユーザー設定
 
-- [ ] このGitHubリポジトリをGitLabにImport
-  - `New project > Import project > GitHub`
-  - インポート後、`Settings > CI/CD > General pipelines > CI/CD configuration file` を `agent/.gitlab-ci.yml` に変更
+- [x] このリポジトリをGitLabにPush（Project ID: 1）
+  - CI/CD configuration file: `agent/.gitlab-ci.yml` 設定済み
 - [ ] Bot user（`ai-bot`）を作成（Developerロール）
 - [ ] Bot userのPersonal Access Token発行（`api` scope） → `.env` の `GITLAB_TOKEN` に設定
 - [ ] Bot userのIDを確認 → `.env` の `BOT_USER_ID` に設定
