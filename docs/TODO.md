@@ -32,11 +32,8 @@
 
 ## Webhook設定
 
-- [ ] GitLab WebhookにWebhook Receiverを登録
-  - URL: `http://13.193.85.82:8001/webhook`
-  - Secret token: `.env` の `WEBHOOK_SECRET` と同じ値
-  - Trigger: **Issues events** と **Comments** にチェック
-- [ ] Webhookのテスト送信で200が返ることを確認
+- [x] GitLab WebhookにWebhook Receiverを登録（URL: http://13.193.85.82:8001/webhook）
+- [x] Webhookのテスト送信で201が返ることを確認
 
 ## 動作確認
 
