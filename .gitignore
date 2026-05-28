@@ -1,0 +1,22 @@
+# Environment variables
+.env
+
+# CDK
+infra/node_modules/
+infra/cdk.out/
+infra/dist/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# SSH keys
+*.pem
+*.key
+
+# OS
+.DS_Store
+Thumbs.db

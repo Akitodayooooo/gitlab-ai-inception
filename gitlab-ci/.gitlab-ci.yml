@@ -1,0 +1,24 @@
+# このファイルはGitLabプロジェクトのリポジトリルートに .gitlab-ci.yml として配置する
+
+stages:
+  - inception
+
+inception_agent:
+  stage: inception
+  image: python:3.12-slim
+  # Pipeline Trigger経由でのみ起動する
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "trigger"
+  before_script:
+    - pip install --quiet anthropic==0.40.0 httpx==0.28.1
+  script:
+    - python gitlab-ci/inception_agent.py
+  variables:
+    # CI Variables (Settings > CI/CD > Variables) で設定すること
+    # - ANTHROPIC_API_KEY (Masked)
+    # - GITLAB_TOKEN (Masked)
+    # 以下はPipeline Triggerから渡される変数
+    # - ISSUE_IID
+    # - EVENT_TYPE
+    GITLAB_URL: "http://gitlab"
+    GITLAB_PROJECT_ID: $CI_PROJECT_ID
