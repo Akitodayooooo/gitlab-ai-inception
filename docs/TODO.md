@@ -2,13 +2,9 @@
 
 ## GitLab初期セットアップ
 
-- [ ] 初期パスワードを取得してrootでログイン
-  ```bash
-  ssh -i gitlab-ai.pem ubuntu@13.193.85.82 \
-    "docker exec gitlab-ai-inception-gitlab-1 cat /etc/gitlab/initial_root_password"
-  ```
-- [ ] GitLabにrootでログイン → `http://13.193.85.82`
-- [ ] rootのパスワードを変更
+- [x] 初期パスワードを取得してrootでログイン
+- [x] GitLabにrootでログイン → `http://13.193.85.82`
+- [x] rootのパスワードを変更
 
 ## プロジェクト・ユーザー設定
 
