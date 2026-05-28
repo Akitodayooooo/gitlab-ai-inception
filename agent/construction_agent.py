@@ -411,6 +411,21 @@ def execute_tool(name: str, inputs: dict, ctx: dict) -> tuple[str, bool]:
 # ---------- Agentic loop ----------
 
 
+def _serialize_content(content_blocks: list) -> list[dict]:
+    """Pydanticオブジェクトをdictに変換してシリアライズ一貫性を保証する.
+
+    response.content をそのまま messages に格納すると、次のAPI呼び出し時に
+    tool_use_id の対応が崩れて 400 エラーになるケースがある.
+    """
+    result = []
+    for block in content_blocks:
+        if hasattr(block, "model_dump"):
+            result.append(block.model_dump())
+        elif isinstance(block, dict):
+            result.append(block)
+    return result
+
+
 def run_agentic_loop(
     client: anthropic.Anthropic,
     system_prompt: str,
@@ -431,7 +446,9 @@ def run_agentic_loop(
             tools=tools,
         )
         logger.info("stop_reason: %s", response.stop_reason)
-        messages.append({"role": "assistant", "content": response.content})
+
+        # Pydanticオブジェクトをdictに変換してから格納
+        messages.append({"role": "assistant", "content": _serialize_content(response.content)})
 
         if response.stop_reason == "end_turn":
             break
@@ -439,19 +456,33 @@ def run_agentic_loop(
         if response.stop_reason == "tool_use":
             tool_results = []
             should_stop = False
+
             for block in response.content:
-                if block.type == "tool_use":
-                    result, stop = execute_tool(block.name, block.input, ctx)  # type: ignore[arg-type]
-                    tool_results.append({
-                        "type": "tool_result",
-                        "tool_use_id": block.id,
-                        "content": result,
-                    })
-                    if stop:
-                        should_stop = True
+                if block.type != "tool_use":
+                    continue
+                result, stop = execute_tool(block.name, block.input, ctx)  # type: ignore[arg-type]
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": str(result),  # 必ず文字列に変換
+                })
+                if stop:
+                    should_stop = True
+
+            if not tool_results:
+                # tool_use stop_reason なのにブロックがない異常ケース
+                logger.error("stop_reason=tool_use but no tool_use blocks found")
+                break
+
             messages.append({"role": "user", "content": tool_results})
+
             if should_stop:
                 break
+
+        else:
+            # max_tokens など想定外の stop_reason は安全に打ち切り
+            logger.warning("Unexpected stop_reason: %s, stopping loop", response.stop_reason)
+            break
 
 
 # ---------- Phase runners ----------
