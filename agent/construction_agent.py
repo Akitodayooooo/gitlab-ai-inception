@@ -1,5 +1,6 @@
 """GitLab AI Construction Agent.
 
+AI-DLC (AI-Driven Development Life Cycle) に基づき、
 ai-inception-done ラベルをトリガーにブランチを作成し、コードを実装してMRを作成する.
 MRへのレビューコメントへの対応も行う.
 """
@@ -28,32 +29,86 @@ BOT_MARKER = "<!-- ai-construction-bot -->"
 INCEPTION_BOT_MARKER = "<!-- ai-inception-bot -->"
 MAX_ITERATIONS = 30
 
-CONSTRUCTION_SYSTEM_PROMPT = """You are an AI construction agent for a software development team.
-Your role is to implement code based on requirements from the inception phase.
+CONSTRUCTION_SYSTEM_PROMPT = """You are an AI construction agent following the AI-DLC (AI-Driven Development Life Cycle) methodology.
 
-## Workflow
-1. Explore the existing codebase to understand the project structure
-2. Implement the required features by creating or modifying files on the feature branch
-3. Call `create_merge_request` when the implementation is complete
+## AI-DLC Construction Phase
 
-## Guidelines
-- Always explore the codebase BEFORE writing any code
-- Follow existing patterns and conventions in the project
+Execute the following phases in order:
+
+### Phase 1: Functional Design
+Before writing any code:
+- Read the requirements from the inception phase
+- Explore the existing codebase with list_files and read_file
+- If aidlc-rules/ directory exists in the repo, read the relevant rule files first
+- Design the solution: identify which files to create/modify
+
+### Phase 2: Implementation
+- Follow existing project conventions and patterns
+- Make atomic commits per unit of work with meaningful messages
 - Write clean, production-ready code
-- Make small, focused commits with clear messages
-- Respond in the same language as the requirements (Japanese is fine)"""
 
-REVIEW_SYSTEM_PROMPT = """You are an AI code review responder.
-Your role is to address review comments on a Merge Request.
+### Phase 3: Quality Check
+- Ensure error handling is comprehensive
+- Follow security best practices (no hardcoded secrets, input validation)
+- Consider edge cases
+
+### Phase 4: MR Creation
+- Call create_merge_request with a clear title and comprehensive description
+- Reference the original issue in the description
+- Summarize all changes
+
+## Claude API / Anthropic SDK Guidelines
+When implementing code that calls the Claude API or uses the Anthropic SDK:
+
+**Model IDs (as of 2026):**
+- Complex reasoning: `claude-opus-4-7`
+- Balanced performance: `claude-sonnet-4-6`
+- Fast/lightweight: `claude-haiku-4-5-20251001`
+
+**Prompt Caching (always include for cost optimization):**
+```python
+# System prompt with cache
+system=[{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}]
+
+# Large context blocks with cache
+messages=[{"role": "user", "content": [
+    {"type": "text", "text": large_context, "cache_control": {"type": "ephemeral"}},
+    {"type": "text", "text": user_question}
+]}]
+```
+
+**Agentic Loop Pattern:**
+```python
+while True:
+    response = client.messages.create(model=..., tools=tools, messages=messages)
+    messages.append({"role": "assistant", "content": response.content})
+    if response.stop_reason == "end_turn":
+        break
+    if response.stop_reason == "tool_use":
+        results = [execute_tool(b) for b in response.content if b.type == "tool_use"]
+        messages.append({"role": "user", "content": results})
+```
+
+**Tool Result Format:**
+```python
+{"type": "tool_result", "tool_use_id": block.id, "content": result_string}
+```
+
+## Language
+Respond in the same language as the requirements (Japanese is fine)."""
+
+REVIEW_SYSTEM_PROMPT = """You are an AI code review responder following AI-DLC methodology.
 
 ## Workflow
-1. Read the MR changes and review comments
-2. Update code where the feedback is valid
-3. Call `post_review_response` with a summary of what you did
+1. Read the changed files and review comments
+2. Update code to address valid feedback
+3. Respond professionally when disagreeing with feedback
+4. Call post_review_response with a summary when done
 
 ## Guidelines
 - Address all review comments
-- Be professional and constructive"""
+- Keep code changes minimal and focused
+- Follow the same Claude API guidelines as construction phase if relevant"""
 
 
 # ---------- GitLab API helpers ----------
@@ -174,6 +229,55 @@ def post_mr_comment(mr_iid: str, body: str) -> None:
     r.raise_for_status()
 
 
+# ---------- AI-DLC rules loader ----------
+
+
+def load_aidlc_rules(ref: str = "main") -> str:
+    """リポジトリの aidlc-rules/ からコンストラクション関連のルールを読み込む.
+
+    ルールが見つからない場合は空文字列を返す.
+    """
+    try:
+        files = list_files("aidlc-rules", ref)
+    except Exception:
+        return ""
+
+    if not files:
+        return ""
+
+    rule_parts: list[str] = []
+    # コンストラクションフェーズに関連するファイルを優先的に読む
+    priority_keywords = ["construction", "workflow", "core", "main", "readme"]
+
+    def priority(f: dict) -> int:
+        name = f["path"].lower()
+        for i, kw in enumerate(priority_keywords):
+            if kw in name:
+                return i
+        return len(priority_keywords)
+
+    target_files = sorted(
+        [f for f in files if f["type"] == "blob"],
+        key=priority
+    )[:5]  # 最大5ファイル（トークン節約）
+
+    for f in target_files:
+        try:
+            content = read_file(f["path"], ref)
+            # 長すぎるファイルは先頭2000文字に制限
+            if len(content) > 2000:
+                content = content[:2000] + "\n...(truncated)"
+            rule_parts.append(f"### {f['path']}\n{content}")
+        except Exception:
+            pass
+
+    if rule_parts:
+        logger.info("Loaded %d AI-DLC rule files", len(rule_parts))
+        return "\n\n".join(rule_parts)
+
+    return ""
+
+
 # ---------- Tools ----------
 
 
@@ -291,11 +395,11 @@ def execute_tool(name: str, inputs: dict, ctx: dict) -> tuple[str, bool]:
             if ctx.get("issue_iid"):
                 post_issue_comment(ctx["issue_iid"],
                     f"コンストラクションフェーズが完了しました。\n\nMRを作成しました: {url}")
-            return f"MR created: {url}", True  # ループ終了
+            return f"MR created: {url}", True
 
         if name == "post_review_response":
             post_mr_comment(ctx["mr_iid"], inputs["message"])
-            return "Comment posted", True  # ループ終了
+            return "Comment posted", True
 
         return f"Unknown tool: {name}", False
 
@@ -382,9 +486,15 @@ def run_construction() -> None:
     logger.info("Branch: %s", branch)
 
     post_issue_comment(ISSUE_IID,
-        f"コンストラクションフェーズを開始します。\n\nブランチ: `{branch}`")
+        f"コンストラクションフェーズを開始します（AI-DLC）。\n\nブランチ: `{branch}`")
 
-    initial_message = f"""以下の要件に基づいて実装してください。
+    # AI-DLCルールをリポジトリから読み込む
+    aidlc_rules = load_aidlc_rules("main")
+    aidlc_section = ""
+    if aidlc_rules:
+        aidlc_section = f"\n\n## AI-DLC ルール（リポジトリから読み込み）\n{aidlc_rules}"
+
+    initial_message = f"""以下の要件に基づいてAI-DLCコンストラクションフェーズを実行してください。
 
 ## Issue #{ISSUE_IID}: {issue['title']}
 
@@ -393,7 +503,8 @@ def run_construction() -> None:
 ## 作業ブランチ
 `{branch}`
 
-まず既存のコードベースを調査してから実装を開始し、完了後に `create_merge_request` を呼び出してください。"""
+まず既存のコードベースを調査（list_files / read_file）してから実装を開始し、
+完了後に `create_merge_request` を呼び出してください。{aidlc_section}"""
 
     run_agentic_loop(
         client,
@@ -413,7 +524,6 @@ def run_review() -> None:
     changes = get_mr_changes(MR_IID)
     notes = get_mr_notes(MR_IID)
 
-    # Botコメントとシステムノートを除外
     review_comments = [
         n for n in notes
         if not n.get("system") and BOT_MARKER not in n.get("body", "")
