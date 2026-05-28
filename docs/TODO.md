@@ -23,16 +23,7 @@
 
 ## GitLab Runner登録
 
-- [ ] GitLab RunnerをEC2上で登録
-  ```bash
-  ssh -i gitlab-ai.pem ubuntu@13.193.85.82
-  docker exec -it gitlab-ai-inception-gitlab-runner-1 \
-    gitlab-runner register \
-    --url http://13.193.85.82 \
-    --executor docker \
-    --docker-image python:3.12-slim
-  ```
-  - Registration tokenは `Settings > CI/CD > Runners` で確認
+- [x] GitLab Runner登録済み（name: inception-agent, status: online）
 
 ## CI/CD Variables設定
 
