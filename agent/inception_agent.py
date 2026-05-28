@@ -7,6 +7,7 @@ DBレス設計: 会話履歴はGitLab APIで毎回取得する.
 import logging
 import os
 import sys
+from datetime import date
 
 import anthropic
 import httpx
@@ -135,6 +136,65 @@ def add_label(project_id: str, issue_iid: str, label: str) -> None:
     logger.info("Added label '%s' to issue #%s", label, issue_iid)
 
 
+# ---------- Inception doc ----------
+
+
+def create_inception_doc(project_id: str, issue_iid: str, issue_title: str, summary: str) -> None:
+    """要件定義サマリーをMDファイルとしてmainブランチに保存する.
+
+    コンストラクションフェーズがこのファイルを要件定義として参照する.
+    ci-botにMaintenanceロールが必要（Developerでは保護ブランチへのコミット不可）.
+    失敗した場合はwarningのみでプロセスを継続する.
+    """
+    doc_path = f"docs/inception/issue-{issue_iid}.md"
+    encoded_path = doc_path.replace("/", "%2F")
+
+    content = f"""# 要件定義: {issue_title}
+
+**Issue**: #{issue_iid}
+**作成日**: {date.today().isoformat()}
+**ステータス**: インセプション完了
+
+---
+
+{summary}
+
+---
+
+*このドキュメントはインセプションフェーズのQ&Aから自動生成されました。*
+*コンストラクションフェーズはこのドキュメントを要件定義として使用します。*
+"""
+
+    payload = {
+        "branch": "main",
+        "content": content,
+        "commit_message": f"docs(inception): add requirements for issue #{issue_iid}",
+    }
+
+    check = httpx.get(
+        f"{GITLAB_URL}/api/v4/projects/{project_id}/repository/files/{encoded_path}",
+        headers=_gitlab_headers(),
+        params={"ref": "main"},
+        timeout=15.0,
+    )
+
+    if check.status_code == 200:
+        r = httpx.put(
+            f"{GITLAB_URL}/api/v4/projects/{project_id}/repository/files/{encoded_path}",
+            headers=_gitlab_headers(), json=payload, timeout=15.0,
+        )
+    else:
+        r = httpx.post(
+            f"{GITLAB_URL}/api/v4/projects/{project_id}/repository/files/{encoded_path}",
+            headers=_gitlab_headers(), json=payload, timeout=15.0,
+        )
+
+    if r.status_code in (200, 201):
+        logger.info("Created inception doc: %s", doc_path)
+    else:
+        logger.warning("Failed to create inception doc (status %d) — falling back to comment only", r.status_code)
+
+
 # ---------- Message building ----------
 
 
@@ -233,12 +293,22 @@ def _handle_tool_use(response: anthropic.types.Message) -> None:
             continue
 
         summary: str = block.input["summary"]  # type: ignore[index]
+
+        # 1. Issueコメントにサマリーを投稿（Q&A履歴の締めくくり）
+        issue = get_issue(GITLAB_PROJECT_ID, ISSUE_IID)
         completion_body = (
             "## 要件定義サマリー\n\n"
             + summary
-            + "\n\n---\n*インセプションフェーズが完了しました。次のステップはコンストラクションフェーズです。*"
+            + "\n\n---\n"
+            + f"*要件定義を `docs/inception/issue-{ISSUE_IID}.md` に保存しました。*\n"
+            + "*インセプションフェーズが完了しました。次のステップはコンストラクションフェーズです。*"
         )
         post_comment(GITLAB_PROJECT_ID, ISSUE_IID, completion_body)
+
+        # 2. MDファイルとしてリポジトリに保存（コンストラクションフェーズが参照）
+        create_inception_doc(GITLAB_PROJECT_ID, ISSUE_IID, issue["title"], summary)
+
+        # 3. ai-inception-done ラベルを付与（コンストラクションフェーズのトリガー）
         add_label(GITLAB_PROJECT_ID, ISSUE_IID, INCEPTION_DONE_LABEL)
         logger.info("Inception phase complete for issue #%s", ISSUE_IID)
         return

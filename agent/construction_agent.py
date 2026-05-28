@@ -465,7 +465,23 @@ def _slugify(text: str) -> str:
 
 
 def _get_requirements(issue_iid: str) -> str:
-    """インセプションフェーズのサマリーコメントを取得する."""
+    """要件定義を取得する.
+
+    優先順位:
+    1. docs/inception/issue-{iid}.md（インセプションエージェントが生成したMDファイル）
+    2. Issueコメント履歴（フォールバック）
+    """
+    # 1. MDファイルを優先参照
+    try:
+        content = read_file(f"docs/inception/issue-{issue_iid}.md", "main")
+        if content:
+            logger.info("Loaded requirements from docs/inception/issue-%s.md", issue_iid)
+            return content
+    except Exception:
+        pass
+
+    # 2. フォールバック: コメント履歴から要件定義サマリーを取得
+    logger.info("MD file not found, falling back to comment history for issue #%s", issue_iid)
     for note in reversed(get_issue_notes(issue_iid)):
         body = note.get("body", "")
         if INCEPTION_BOT_MARKER in body and "要件定義サマリー" in body:
