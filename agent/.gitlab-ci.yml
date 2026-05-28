@@ -1,26 +1,35 @@
-# このファイルはGitLabプロジェクトのリポジトリルートに .gitlab-ci.yml として配置する
+# このファイルはGitLabプロジェクトの
+# Settings > CI/CD > General pipelines > CI/CD configuration file
+# に agent/.gitlab-ci.yml と設定して使用する
 
 stages:
   - inception
+  - construction
 
 inception_agent:
   stage: inception
   image: python:3.12-slim
-  # Pipeline Trigger経由でのみ起動する
   rules:
-    - if: $CI_PIPELINE_SOURCE == "trigger"
+    - if: '$CI_PIPELINE_SOURCE == "trigger" && $EVENT_TYPE =~ /^(label_added|comment)$/'
   before_script:
     - pip install --quiet anthropic==0.40.0 httpx==0.28.1
   script:
     - python agent/inception_agent.py
   variables:
-    # CI Variables (Settings > CI/CD > Variables) で設定すること
-    # - ANTHROPIC_API_KEY (Masked)
-    # - GITLAB_TOKEN (Masked)
-    # 以下はPipeline Triggerから渡される変数
-    # - ISSUE_IID
-    # - EVENT_TYPE
     # CI_SERVER_URL はGitLab Runnerが登録時に設定する GitLab の URL に自動解決される
     # Docker executor で spawn されたコンテナからも正しく到達できる
+    GITLAB_URL: $CI_SERVER_URL
+    GITLAB_PROJECT_ID: $CI_PROJECT_ID
+
+construction_agent:
+  stage: construction
+  image: python:3.12-slim
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "trigger" && $EVENT_TYPE =~ /^(construction_start|mr_review)$/'
+  before_script:
+    - pip install --quiet anthropic==0.40.0 httpx==0.28.1
+  script:
+    - python agent/construction_agent.py
+  variables:
     GITLAB_URL: $CI_SERVER_URL
     GITLAB_PROJECT_ID: $CI_PROJECT_ID

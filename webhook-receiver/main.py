@@ -22,20 +22,24 @@ INCEPTION_LABEL = "ai-inception"
 INCEPTION_DONE_LABEL = "ai-inception-done"
 
 
-def trigger_pipeline(issue_iid: str, event_type: str) -> None:
+def trigger_pipeline(event_type: str, variables: dict | None = None) -> None:
     """Pipeline Trigger APIを呼び出してCI Jobを起動する."""
+    data: dict = {
+        "token": TRIGGER_TOKEN,
+        "ref": "main",
+        "variables[EVENT_TYPE]": event_type,
+    }
+    if variables:
+        for key, value in variables.items():
+            data[f"variables[{key}]"] = str(value)
+
     response = httpx.post(
         f"{GITLAB_URL}/api/v4/projects/{GITLAB_PROJECT_ID}/trigger/pipeline",
-        data={
-            "token": TRIGGER_TOKEN,
-            "ref": "main",
-            "variables[ISSUE_IID]": issue_iid,
-            "variables[EVENT_TYPE]": event_type,
-        },
+        data=data,
         timeout=10.0,
     )
     response.raise_for_status()
-    logger.info("Pipeline triggered for issue #%s (event: %s)", issue_iid, event_type)
+    logger.info("Pipeline triggered: event=%s vars=%s", event_type, variables)
 
 
 def get_issue_labels(issue_iid: str) -> list[str]:
@@ -67,47 +71,47 @@ async def receive_webhook(
     if event_type == "note":
         return _handle_note_event(payload)
 
-    return {"status": "ignored", "reason": f"unhandled event type: {event_type}"}
+    return {"status": "ignored", "reason": f"unhandled event: {event_type}"}
 
 
 def _handle_issue_event(payload: dict) -> dict:
-    """IssueイベントからのWebhookを処理する.
-
-    ai-inception ラベルが新たに付与された場合のみPipelineをトリガーする.
-    """
+    """Issueのラベル変更イベントを処理する."""
     changes = payload.get("changes", {})
     labels_change = changes.get("labels", {})
-
-    current_labels = [label["title"] for label in labels_change.get("current", [])]
-    previous_labels = [label["title"] for label in labels_change.get("previous", [])]
-
-    # ai-inception ラベルが今回初めて付与されたか判定
-    newly_added = INCEPTION_LABEL in current_labels and INCEPTION_LABEL not in previous_labels
-
-    if not newly_added:
-        return {"status": "ignored", "reason": "inception label not newly added"}
-
-    # すでに完了済みの場合はスキップ
-    if INCEPTION_DONE_LABEL in current_labels:
-        return {"status": "ignored", "reason": "already done"}
+    current_labels = [l["title"] for l in labels_change.get("current", [])]
+    previous_labels = [l["title"] for l in labels_change.get("previous", [])]
 
     issue_iid = str(payload["object_attributes"]["iid"])
-    trigger_pipeline(issue_iid, "label_added")
-    return {"status": "ok", "issue_iid": issue_iid}
+
+    # ai-inception ラベルが今回新たに付与された → インセプション開始
+    if INCEPTION_LABEL in current_labels and INCEPTION_LABEL not in previous_labels:
+        if INCEPTION_DONE_LABEL not in current_labels:
+            trigger_pipeline("label_added", {"ISSUE_IID": issue_iid})
+            return {"status": "ok", "event": "label_added", "issue_iid": issue_iid}
+
+    # ai-inception-done ラベルが今回新たに付与された → コンストラクション開始
+    if INCEPTION_DONE_LABEL in current_labels and INCEPTION_DONE_LABEL not in previous_labels:
+        trigger_pipeline("construction_start", {"ISSUE_IID": issue_iid})
+        return {"status": "ok", "event": "construction_start", "issue_iid": issue_iid}
+
+    return {"status": "ignored", "reason": "no relevant label change"}
 
 
 def _handle_note_event(payload: dict) -> dict:
-    """NoteイベントからのWebhookを処理する.
-
-    ai-inception ラベルが付いたIssueへのユーザーコメントのみPipelineをトリガーする.
-    """
+    """コメントイベントを処理する. Issue / MR どちらも対応する."""
     note = payload.get("object_attributes", {})
+    noteable_type = note.get("noteable_type")
 
-    # Issue以外のコメント (MR, Snippet等) は無視
-    if note.get("noteable_type") != "Issue":
-        return {"status": "ignored", "reason": "not an issue note"}
+    if noteable_type == "Issue":
+        return _handle_issue_note(payload, note)
+    if noteable_type == "MergeRequest":
+        return _handle_mr_note(payload)
 
-    # Bot自身のコメントによる無限ループを防止
+    return {"status": "ignored", "reason": f"unsupported noteable_type: {noteable_type}"}
+
+
+def _handle_issue_note(payload: dict, note: dict) -> dict:
+    """ai-inception ラベル付きIssueへのコメントに反応する."""
     author_id = payload.get("user", {}).get("id")
     if author_id == BOT_USER_ID:
         return {"status": "ignored", "reason": "bot comment"}
@@ -115,15 +119,28 @@ def _handle_note_event(payload: dict) -> dict:
     # GitLabのコメントWebhookではIIDはtop-levelの issue.iid に入っている
     issue_iid = str(payload.get("issue", {}).get("iid"))
 
-    # ai-inception ラベルが付いており、かつ未完了の場合のみトリガー
     labels = get_issue_labels(issue_iid)
     if INCEPTION_LABEL not in labels:
         return {"status": "ignored", "reason": "no inception label"}
     if INCEPTION_DONE_LABEL in labels:
         return {"status": "ignored", "reason": "already done"}
 
-    trigger_pipeline(issue_iid, "comment")
-    return {"status": "ok", "issue_iid": issue_iid}
+    trigger_pipeline("comment", {"ISSUE_IID": issue_iid})
+    return {"status": "ok", "event": "comment", "issue_iid": issue_iid}
+
+
+def _handle_mr_note(payload: dict) -> dict:
+    """MRへのレビューコメントに反応する."""
+    author_id = payload.get("user", {}).get("id")
+    if author_id == BOT_USER_ID:
+        return {"status": "ignored", "reason": "bot comment"}
+
+    mr_iid = str(payload.get("merge_request", {}).get("iid", ""))
+    if not mr_iid:
+        return {"status": "ignored", "reason": "no mr_iid"}
+
+    trigger_pipeline("mr_review", {"MR_IID": mr_iid})
+    return {"status": "ok", "event": "mr_review", "mr_iid": mr_iid}
 
 
 @app.get("/health")
