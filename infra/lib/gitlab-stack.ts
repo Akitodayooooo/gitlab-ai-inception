@@ -1,12 +1,17 @@
 import * as cdk from 'aws-cdk-lib';
+import * as budgets from 'aws-cdk-lib/aws-budgets';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as iam from 'aws-cdk-lib/aws-iam';
+import * as scheduler from 'aws-cdk-lib/aws-scheduler';
 import { Construct } from 'constructs';
 
 export interface GitlabStackProps extends cdk.StackProps {
   instanceType?: ec2.InstanceType;
-  // SSH CIDR: デフォルトは全IP許可 (本番では絞ること)
   sshCidr?: string;
+  budgetAlertEmail?: string;
+  // EC2自動起動・停止の時刻 (UTC時)
+  startHourUtc?: number;
+  stopHourUtc?: number;
 }
 
 export class GitlabStack extends cdk.Stack {
@@ -18,8 +23,11 @@ export class GitlabStack extends cdk.Stack {
       ec2.InstanceType.of(ec2.InstanceClass.T3, ec2.InstanceSize.MEDIUM);
 
     const sshCidr = props?.sshCidr ?? '0.0.0.0/0';
+    const startHourUtc = props?.startHourUtc ?? 0;   // 9:00 JST
+    const stopHourUtc = props?.stopHourUtc ?? 13;    // 22:00 JST
 
-    // VPC: シングルAZ・パブリックサブネットのみ (コスト最小化のためNAT GW不使用)
+    // ── VPC ──────────────────────────────────────────────────────────────────
+    // シングルAZ・パブリックサブネットのみ (NAT GW不使用でコスト最小化)
     const vpc = new ec2.Vpc(this, 'Vpc', {
       maxAzs: 1,
       natGateways: 0,
@@ -32,7 +40,7 @@ export class GitlabStack extends cdk.Stack {
       ],
     });
 
-    // Security Group
+    // ── Security Group ────────────────────────────────────────────────────────
     const sg = new ec2.SecurityGroup(this, 'SecurityGroup', {
       vpc,
       description: 'GitLab AI Inception Agent',
@@ -44,7 +52,8 @@ export class GitlabStack extends cdk.Stack {
     sg.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(2222), 'GitLab SSH');
     sg.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(8001), 'Webhook Receiver');
 
-    // IAM Role: SSM Session Manager でノーSSH接続も可能にする
+    // ── IAM Role (EC2) ────────────────────────────────────────────────────────
+    // SSM Session Manager でSSHキー不要のアクセスも可能にする
     const role = new iam.Role(this, 'InstanceRole', {
       assumedBy: new iam.ServicePrincipal('ec2.amazonaws.com'),
       managedPolicies: [
@@ -52,24 +61,24 @@ export class GitlabStack extends cdk.Stack {
       ],
     });
 
-    // SSHキーペア (秘密鍵はSSM Parameter Storeに保存される)
+    // ── SSH Key Pair ──────────────────────────────────────────────────────────
+    // 秘密鍵はSSM Parameter Storeに自動保存される
     const keyPair = new ec2.KeyPair(this, 'KeyPair', {
       keyPairName: 'gitlab-ai-inception',
     });
 
-    // Ubuntu 22.04 LTS AMI (公式SSMパラメータから取得)
+    // ── AMI ───────────────────────────────────────────────────────────────────
     const ami = ec2.MachineImage.fromSsmParameter(
       '/aws/service/canonical/ubuntu/server/22.04/stable/current/amd64/hvm/ebs-gp2/ami-id',
       { os: ec2.OperatingSystemType.LINUX },
     );
 
-    // User Data: DockerとDocker Composeをインストール
+    // ── User Data ─────────────────────────────────────────────────────────────
     const userData = ec2.UserData.forLinux();
     userData.addCommands(
       'set -euo pipefail',
       'apt-get update -y',
       'apt-get install -y apt-transport-https ca-certificates curl gnupg lsb-release git',
-      // Docker公式リポジトリを追加
       'curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg',
       'echo "deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null',
       'apt-get update -y',
@@ -77,12 +86,11 @@ export class GitlabStack extends cdk.Stack {
       'systemctl enable docker',
       'systemctl start docker',
       'usermod -aG docker ubuntu',
-      // アプリ配置ディレクトリを作成
       'mkdir -p /home/ubuntu/gitlab-ai-inception',
       'chown ubuntu:ubuntu /home/ubuntu/gitlab-ai-inception',
     );
 
-    // EC2インスタンス
+    // ── EC2 Instance ──────────────────────────────────────────────────────────
     const instance = new ec2.Instance(this, 'Instance', {
       vpc,
       instanceType,
@@ -103,7 +111,7 @@ export class GitlabStack extends cdk.Stack {
       ],
     });
 
-    // Elastic IP: 固定IPを割り当て
+    // ── Elastic IP ────────────────────────────────────────────────────────────
     const eip = new ec2.CfnEIP(this, 'ElasticIP', {
       domain: 'vpc',
       tags: [{ key: 'Name', value: 'gitlab-ai-inception' }],
@@ -113,7 +121,81 @@ export class GitlabStack extends cdk.Stack {
       allocationId: eip.attrAllocationId,
     });
 
-    // Outputs
+    // ── EC2 自動起動・停止スケジュール (EventBridge Scheduler) ─────────────────
+    // 使用時間帯 (9:00-22:00 JST) のみ起動してコストを約60%削減
+    const instanceArn = `arn:aws:ec2:${this.region}:${this.account}:instance/${instance.instanceId}`;
+    const schedulerRole = new iam.Role(this, 'SchedulerRole', {
+      assumedBy: new iam.ServicePrincipal('scheduler.amazonaws.com'),
+      inlinePolicies: {
+        Ec2StartStop: new iam.PolicyDocument({
+          statements: [
+            new iam.PolicyStatement({
+              actions: ['ec2:StartInstances', 'ec2:StopInstances'],
+              resources: [instanceArn],
+            }),
+          ],
+        }),
+      },
+    });
+
+    // 毎日 startHourUtc:00 UTC に起動
+    new scheduler.CfnSchedule(this, 'StartSchedule', {
+      name: 'gitlab-ai-inception-start',
+      scheduleExpression: `cron(0 ${startHourUtc} * * ? *)`,
+      flexibleTimeWindow: { mode: 'OFF' },
+      target: {
+        arn: 'arn:aws:scheduler:::aws-sdk:ec2:startInstances',
+        roleArn: schedulerRole.roleArn,
+        input: this.toJsonString({ InstanceIds: [instance.instanceId] }),
+      },
+    });
+
+    // 毎日 stopHourUtc:00 UTC に停止
+    new scheduler.CfnSchedule(this, 'StopSchedule', {
+      name: 'gitlab-ai-inception-stop',
+      scheduleExpression: `cron(0 ${stopHourUtc} * * ? *)`,
+      flexibleTimeWindow: { mode: 'OFF' },
+      target: {
+        arn: 'arn:aws:scheduler:::aws-sdk:ec2:stopInstances',
+        roleArn: schedulerRole.roleArn,
+        input: this.toJsonString({ InstanceIds: [instance.instanceId] }),
+      },
+    });
+
+    // ── AWS Budget アラート ───────────────────────────────────────────────────
+    // 月次コストが$20を超えそうな場合にメール通知
+    if (props?.budgetAlertEmail) {
+      new budgets.CfnBudget(this, 'MonthlyBudget', {
+        budget: {
+          budgetName: 'gitlab-ai-inception-monthly',
+          budgetType: 'COST',
+          timeUnit: 'MONTHLY',
+          budgetLimit: { amount: 20, unit: 'USD' },
+        },
+        notificationsWithSubscribers: [
+          {
+            notification: {
+              notificationType: 'ACTUAL',
+              comparisonOperator: 'GREATER_THAN',
+              threshold: 80,
+              thresholdType: 'PERCENTAGE',
+            },
+            subscribers: [{ subscriptionType: 'EMAIL', address: props.budgetAlertEmail }],
+          },
+          {
+            notification: {
+              notificationType: 'ACTUAL',
+              comparisonOperator: 'GREATER_THAN',
+              threshold: 100,
+              thresholdType: 'PERCENTAGE',
+            },
+            subscribers: [{ subscriptionType: 'EMAIL', address: props.budgetAlertEmail }],
+          },
+        ],
+      });
+    }
+
+    // ── Outputs ───────────────────────────────────────────────────────────────
     new cdk.CfnOutput(this, 'InstanceId', {
       value: instance.instanceId,
       description: 'EC2 Instance ID',

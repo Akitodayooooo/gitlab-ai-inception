@@ -33,8 +33,6 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - runner_config:/etc/gitlab-runner
-    environment:
-      - CI_SERVER_URL=http://gitlab
 
   webhook-receiver:
     build: ./webhook-receiver

@@ -20,5 +20,7 @@ inception_agent:
     # 以下はPipeline Triggerから渡される変数
     # - ISSUE_IID
     # - EVENT_TYPE
-    GITLAB_URL: "http://gitlab"
+    # CI_SERVER_URL はGitLab Runnerが登録時に設定する GitLab の URL に自動解決される
+    # Docker executor で spawn されたコンテナからも正しく到達できる
+    GITLAB_URL: $CI_SERVER_URL
     GITLAB_PROJECT_ID: $CI_PROJECT_ID
