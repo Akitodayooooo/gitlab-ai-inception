@@ -12,8 +12,10 @@ new GitlabStack(app, 'GitlabAiInceptionStack', {
   instanceType: ec2.InstanceType.of(ec2.InstanceClass.T3, ec2.InstanceSize.LARGE),
   sshCidr: '106.73.67.193/32',
   budgetAlertEmail: 'restofakito@gmail.com',
-  startHourUtc: 9,   // 18:00 JST
-  stopHourUtc: 15,   // 24:00 JST
+  // 都度起動運用のためスケジュールなし
+  // 自動起動・停止を有効にする場合は以下をコメントアウト解除:
+  // startHourUtc: 9,   // 18:00 JST
+  // stopHourUtc: 15,   // 24:00 JST
   tags: {
     Project: 'gitlab-ai-inception',
     ManagedBy: 'cdk',

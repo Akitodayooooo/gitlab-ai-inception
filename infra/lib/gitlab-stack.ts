@@ -23,8 +23,8 @@ export class GitlabStack extends cdk.Stack {
       ec2.InstanceType.of(ec2.InstanceClass.T3, ec2.InstanceSize.MEDIUM);
 
     const sshCidr = props?.sshCidr ?? '0.0.0.0/0';
-    const startHourUtc = props?.startHourUtc ?? 0;   // 9:00 JST
-    const stopHourUtc = props?.stopHourUtc ?? 13;    // 22:00 JST
+    const startHourUtc = props?.startHourUtc;
+    const stopHourUtc = props?.stopHourUtc;
 
     // ── VPC ──────────────────────────────────────────────────────────────────
     // シングルAZ・パブリックサブネットのみ (NAT GW不使用でコスト最小化)
@@ -121,46 +121,45 @@ export class GitlabStack extends cdk.Stack {
       allocationId: eip.attrAllocationId,
     });
 
-    // ── EC2 自動起動・停止スケジュール (EventBridge Scheduler) ─────────────────
-    // 使用時間帯 (9:00-22:00 JST) のみ起動してコストを約60%削減
-    const instanceArn = `arn:aws:ec2:${this.region}:${this.account}:instance/${instance.instanceId}`;
-    const schedulerRole = new iam.Role(this, 'SchedulerRole', {
-      assumedBy: new iam.ServicePrincipal('scheduler.amazonaws.com'),
-      inlinePolicies: {
-        Ec2StartStop: new iam.PolicyDocument({
-          statements: [
-            new iam.PolicyStatement({
-              actions: ['ec2:StartInstances', 'ec2:StopInstances'],
-              resources: [instanceArn],
-            }),
-          ],
-        }),
-      },
-    });
-
-    // 毎日 startHourUtc:00 UTC に起動
-    new scheduler.CfnSchedule(this, 'StartSchedule', {
-      name: 'gitlab-ai-inception-start',
-      scheduleExpression: `cron(0 ${startHourUtc} * * ? *)`,
-      flexibleTimeWindow: { mode: 'OFF' },
-      target: {
-        arn: 'arn:aws:scheduler:::aws-sdk:ec2:startInstances',
-        roleArn: schedulerRole.roleArn,
-        input: this.toJsonString({ InstanceIds: [instance.instanceId] }),
-      },
-    });
-
-    // 毎日 stopHourUtc:00 UTC に停止
-    new scheduler.CfnSchedule(this, 'StopSchedule', {
-      name: 'gitlab-ai-inception-stop',
-      scheduleExpression: `cron(0 ${stopHourUtc} * * ? *)`,
-      flexibleTimeWindow: { mode: 'OFF' },
-      target: {
-        arn: 'arn:aws:scheduler:::aws-sdk:ec2:stopInstances',
-        roleArn: schedulerRole.roleArn,
-        input: this.toJsonString({ InstanceIds: [instance.instanceId] }),
-      },
-    });
+    // ── EC2 自動起動・停止スケジュール (オプション) ───────────────────────────
+    // startHourUtc / stopHourUtc が両方指定された場合のみ作成する
+    // 未指定の場合は都度起動（make start / make stop）で運用する
+    if (startHourUtc !== undefined && stopHourUtc !== undefined) {
+      const instanceArn = `arn:aws:ec2:${this.region}:${this.account}:instance/${instance.instanceId}`;
+      const schedulerRole = new iam.Role(this, 'SchedulerRole', {
+        assumedBy: new iam.ServicePrincipal('scheduler.amazonaws.com'),
+        inlinePolicies: {
+          Ec2StartStop: new iam.PolicyDocument({
+            statements: [
+              new iam.PolicyStatement({
+                actions: ['ec2:StartInstances', 'ec2:StopInstances'],
+                resources: [instanceArn],
+              }),
+            ],
+          }),
+        },
+      });
+      new scheduler.CfnSchedule(this, 'StartSchedule', {
+        name: 'gitlab-ai-inception-start',
+        scheduleExpression: `cron(0 ${startHourUtc} * * ? *)`,
+        flexibleTimeWindow: { mode: 'OFF' },
+        target: {
+          arn: 'arn:aws:scheduler:::aws-sdk:ec2:startInstances',
+          roleArn: schedulerRole.roleArn,
+          input: this.toJsonString({ InstanceIds: [instance.instanceId] }),
+        },
+      });
+      new scheduler.CfnSchedule(this, 'StopSchedule', {
+        name: 'gitlab-ai-inception-stop',
+        scheduleExpression: `cron(0 ${stopHourUtc} * * ? *)`,
+        flexibleTimeWindow: { mode: 'OFF' },
+        target: {
+          arn: 'arn:aws:scheduler:::aws-sdk:ec2:stopInstances',
+          roleArn: schedulerRole.roleArn,
+          input: this.toJsonString({ InstanceIds: [instance.instanceId] }),
+        },
+      });
+    }
 
     // ── AWS Budget アラート ───────────────────────────────────────────────────
     // 月次コストが$20を超えそうな場合にメール通知
