@@ -10,8 +10,8 @@ new GitlabStack(app, 'GitlabAiInceptionStack', {
   },
   sshCidr: '106.73.67.193/32',
   budgetAlertEmail: 'restofakito@gmail.com',
-  startHourUtc: 0,   // 9:00 JST
-  stopHourUtc: 13,   // 22:00 JST
+  startHourUtc: 9,   // 18:00 JST
+  stopHourUtc: 15,   // 24:00 JST
   tags: {
     Project: 'gitlab-ai-inception',
     ManagedBy: 'cdk',
